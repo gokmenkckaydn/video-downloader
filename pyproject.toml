@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-downloader"
+version = "0.1.0"
+description = "Reliable, user-friendly video downloading application built on yt-dlp."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "yt-dlp",
+    "typer",
+    "rich",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx",
+]
+web = [
+    "fastapi",
+    "uvicorn[standard]",
+]
+gui = [
+    "PySide6",
+]
+
+[project.scripts]
+video-downloader = "video_downloader.__main__:app"
+video-downloader-gui = "video_downloader.gui.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: exercises real network/yt-dlp calls, excluded from the default run",
+]
+addopts = "-m 'not live'"
