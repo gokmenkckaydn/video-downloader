@@ -3,6 +3,8 @@
 Reliable, user-friendly video downloading application. Give it a URL, it downloads the video/media.
 Built so additional platforms and UIs can be added later without a major rewrite.
 
+![Video Downloader desktop app screenshot](screenshot.png)
+
 ## Architecture
 
 Layered design, core decoupled from any specific UI:
