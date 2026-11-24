@@ -5,7 +5,7 @@ from typing import Annotated, Optional
 
 import typer
 
-from video_downloader.core.models import Quality
+from video_downloader.core.models import AudioFormat, Quality
 
 OutputDirOption = Annotated[
     Optional[Path],
@@ -20,6 +20,14 @@ QualityOption = Annotated[
 AudioOnlyOption = Annotated[
     bool,
     typer.Option("--audio-only", help="Download audio only."),
+]
+
+AudioFormatOption = Annotated[
+    Optional[AudioFormat],
+    typer.Option(
+        "--audio-format",
+        help="Audio file format (implies --audio-only). mp3 plays on almost every car stereo/player. [default: m4a]",
+    ),
 ]
 
 TimeoutOption = Annotated[

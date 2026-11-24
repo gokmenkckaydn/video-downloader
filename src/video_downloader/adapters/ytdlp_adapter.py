@@ -17,6 +17,7 @@ from video_downloader.core.errors import (
     VideoUnavailableError,
 )
 from video_downloader.core.models import (
+    AudioFormat,
     DownloadRequest,
     DownloadResult,
     MediaFormat,
@@ -45,6 +46,7 @@ _QUALITY_FORMAT_SELECTORS = {
     Quality.P480: "bv*[height<=480]+ba/b[height<=480]/b[height<=480]",
 }
 _AUDIO_ONLY_SELECTOR = "bestaudio/best"
+_PROBE_TIMEOUT_SECONDS = 30.0
 
 _PROGRESS_STATUS_MAP = {
     "downloading": ProgressStatus.DOWNLOADING,
@@ -108,12 +110,28 @@ class YtDlpAdapter:
         return opts
 
     def probe(self, url: str) -> MediaInfo:
-        opts = {**self._base_opts(), "skip_download": True}
+        opts = {
+            **self._base_opts(),
+            "skip_download": True,
+            # A watch URL copied from YouTube often carries "&list=RD..." (an
+            # auto-generated Mix/radio playlist). Without noplaylist yt-dlp
+            # resolves every entry of that playlist first, which takes minutes
+            # and returns the playlist instead of the video the user meant.
+            "noplaylist": True,
+            # For a pure playlist URL, list entries without resolving each one,
+            # so it's rejected below in seconds instead of hanging.
+            "extract_flat": "in_playlist",
+            "socket_timeout": _PROBE_TIMEOUT_SECONDS,
+        }
         try:
             with self._youtube_dl_factory(opts) as ydl:
                 raw = ydl.extract_info(url, download=False)
         except YtDlpDownloadError as error:
             raise self._translate(error) from error
+        if raw.get("_type") in ("playlist", "multi_video"):
+            raise UnsupportedPlatformError(
+                "This is a playlist URL, not a single video. Paste the individual video URLs instead.",
+            )
         return self._to_media_info(raw, url)
 
     def download(
@@ -123,7 +141,11 @@ class YtDlpAdapter:
         cancel_token: CancellationToken,
     ) -> DownloadResult:
         media_info = self.probe(request.url)
-        ext = "m4a" if request.audio_only else "mp4"
+        if cancel_token.is_cancelled:
+            # Cancel pressed while probing: the progress hook below never ran yet.
+            raise DownloadInterruptedError("Download cancelled.")
+        audio_format = AudioFormat(request.audio_format)
+        ext = audio_format.value if request.audio_only else "mp4"
         target_path = self._filename_planner.plan(request.output_dir, media_info.title, ext)
 
         def hook(status: dict) -> None:
@@ -149,7 +171,12 @@ class YtDlpAdapter:
             "windowsfilenames": True,
         }
         if request.audio_only:
-            opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "m4a"}]
+            extract_audio = {"key": "FFmpegExtractAudio", "preferredcodec": audio_format.value}
+            if audio_format is AudioFormat.MP3:
+                # MP3 is a re-encode (YouTube serves AAC/Opus), so pin a solid
+                # constant bitrate that every car stereo/player handles.
+                extract_audio["preferredquality"] = "192"
+            opts["postprocessors"] = [extract_audio]
         else:
             opts["merge_output_format"] = "mp4"
             opts["postprocessors"] = [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}]

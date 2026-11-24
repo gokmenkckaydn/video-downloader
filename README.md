@@ -43,6 +43,24 @@ Requires `ffmpeg` on PATH (used by yt-dlp to merge/convert streams) — not bund
 .\.venv\Scripts\python.exe -m video_downloader info <URL>
 ```
 
+### Multiple URLs at once
+
+Every UI (CLI, web, desktop) accepts one URL or many in the same input. Each URL is downloaded
+separately, one after another; a failing URL doesn't stop the rest, and a summary is shown at the end.
+Accepted shapes (all parsed by `core/url_parsing.py`):
+
+- one per line, or separated by spaces / commas / semicolons
+- glued together with no separator: `https://a.com/1https://b.com/2https://c.com/3`
+- duplicates are skipped; fragments without `http(s)://` (e.g. `www.site.com/x`) are reported as skipped
+
+```powershell
+.\.venv\Scripts\python.exe -m video_downloader download <URL1> <URL2> <URL3>
+.\.venv\Scripts\python.exe -m video_downloader download "https://a.com/1https://b.com/2https://c.com/3"
+```
+
+The CLI exits with code 1 if any URL failed or was skipped. The web UI adds `POST /downloads/batch`
+(`{"text": "...", "quality": "best", "audio_only": false}`, max 50 URLs) which starts one job per URL.
+
 ### Sites that require sign-in (Instagram and others)
 
 Many platforms — Instagram in particular — refuse to serve most content to yt-dlp unless it looks like
@@ -107,8 +125,53 @@ To build a standalone `.exe` (no Python install required to run it):
 .\.venv\Scripts\python.exe -m PyInstaller video-downloader-gui.spec
 ```
 
-Output is `dist\video-downloader-gui.exe` (~55MB, one file). `ffmpeg` is still a runtime prerequisite —
+Output is `dist\video-downloader2-gui.exe` (~55MB, one file). `ffmpeg` is still a runtime prerequisite —
 not bundled into the `.exe` — so it must be on `PATH` wherever the `.exe` runs.
+
+## Android (Termux)
+
+The CLI has no Windows/Qt-specific dependencies (`yt-dlp`, `typer`, `rich` are all pure Python), so it
+runs unmodified on Android inside [Termux](https://f-droid.org/en/packages/com.termux/) — install it
+from **F-Droid**, not the Play Store version (unmaintained and broken for years).
+
+```bash
+pkg update && pkg install -y python ffmpeg git
+termux-setup-storage          # grants access to /sdcard as ~/storage, and prompts once
+git clone https://github.com/gokmenkckaydn/video-downloader.git
+cd video-downloader
+pip install -e .              # base deps only (no gui/web extras — those need PySide6/FastAPI)
+```
+
+Point downloads at shared storage so they show up in the phone's own Files/Gallery app instead of
+Termux's private, app-sandboxed home directory:
+
+```bash
+export VIDEO_DOWNLOADER_OUTPUT_DIR=~/storage/shared/Download/video_downloader
+python -m video_downloader download <URL>
+```
+
+Add that `export` line to `~/.bashrc` to make it permanent.
+
+### Cookies on Android (Instagram etc.)
+
+`--cookies-from-browser` reads a *desktop* browser's local cookie database format — there is no Android
+browser yt-dlp can read that way, so it will not work here. Use `--cookies-file` instead, same as the
+Windows DPAPI fallback in the section above:
+
+1. Install a browser that supports extensions — Firefox for Android or Kiwi Browser — and log into
+   Instagram (or whichever site) in it.
+2. Install the "Get cookies.txt LOCALLY" extension in that browser and export `cookies.txt` while logged
+   in.
+3. Save the export to shared storage (e.g. the Downloads app) so Termux can see it under
+   `~/storage/shared/Download/cookies.txt`, then pass it explicitly:
+
+```bash
+python -m video_downloader download <URL> --cookies-file ~/storage/shared/Download/cookies.txt
+# or set it once:
+export VIDEO_DOWNLOADER_COOKIES_FILE=~/storage/shared/Download/cookies.txt
+```
+
+Only use cookies from your own logged-in session, for content you're already allowed to view.
 
 ## Tests
 

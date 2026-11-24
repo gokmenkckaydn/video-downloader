@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import signal
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, List, Optional
 
 import typer
 
 from video_downloader.cli.formatting import ProgressReporter, print_error
 from video_downloader.cli.options import (
+    AudioFormatOption,
     AudioOnlyOption,
     CookiesFileOption,
     CookiesFromBrowserOption,
@@ -17,10 +18,11 @@ from video_downloader.cli.options import (
     TimeoutOption,
 )
 from video_downloader.config.settings import AppConfig
-from video_downloader.core.errors import DownloadError
-from video_downloader.core.models import DownloadRequest, Quality
+from video_downloader.core.errors import DownloadError, InvalidUrlError
+from video_downloader.core.models import AudioFormat, DownloadRequest, Quality
 from video_downloader.core.ports import CancellationToken
 from video_downloader.core.service import DownloadService
+from video_downloader.core.url_parsing import extract_urls
 from video_downloader.core.validation import validate_url
 from video_downloader.utils.logging import configure_logging
 
@@ -65,33 +67,52 @@ def main(
 
 @app.command()
 def download(
-    url: str,
+    urls: Annotated[
+        List[str],
+        typer.Argument(
+            help=(
+                "One or more URLs. Several URLs can also be pasted as a single argument, "
+                "separated by spaces/newlines/commas or glued together (https://a...https://b...)."
+            ),
+            show_default=False,
+        ),
+    ],
     output: OutputDirOption = None,
     quality: QualityOption = Quality.BEST,
     audio_only: AudioOnlyOption = False,
+    audio_format: AudioFormatOption = None,
     timeout: TimeoutOption = 30.0,
     cookies_from_browser: CookiesFromBrowserOption = None,
     cookies_file: CookiesFileOption = None,
     debug: DebugOption = False,
 ) -> None:
-    """Download a video from URL."""
+    """Download one or more videos. Each URL is downloaded separately, one after another."""
     configure_logging(debug)
     config = AppConfig.from_env()
     output_dir = output or config.output_dir
+    if audio_format is not None:
+        audio_only = True
 
-    try:
-        validated_url = validate_url(url)
-    except DownloadError as error:
-        print_error(error, debug=debug)
-        raise typer.Exit(code=1) from error
+    parsed = extract_urls(" ".join(urls))
+    for fragment in parsed.ignored:
+        typer.secho(
+            f"Skipped '{fragment}': URLs must start with http:// or https://.", fg=typer.colors.YELLOW, err=True
+        )
+    if parsed.duplicates:
+        typer.secho(f"Skipped {parsed.duplicates} duplicate URL(s).", fg=typer.colors.YELLOW, err=True)
 
-    request = DownloadRequest(
-        url=validated_url,
-        output_dir=output_dir,
-        quality=quality,
-        audio_only=audio_only,
-        timeout_seconds=timeout,
-    )
+    valid_urls: list[str] = []
+    invalid_count = 0
+    for candidate in parsed.urls:
+        try:
+            valid_urls.append(validate_url(candidate))
+        except DownloadError as error:
+            invalid_count += 1
+            typer.secho(f"Skipped '{candidate}': {error.user_message}", fg=typer.colors.YELLOW, err=True)
+
+    if not valid_urls:
+        print_error(InvalidUrlError("No valid http/https URL found in the input."), debug=False)
+        raise typer.Exit(code=1)
 
     service = _build_service(
         cookies_from_browser=cookies_from_browser or config.cookies_from_browser,
@@ -103,17 +124,52 @@ def download(
     def _handle_sigint(signum, frame) -> None:
         cancel_token.cancel()
 
+    is_batch = len(valid_urls) > 1
+    succeeded: list[tuple[str, Path]] = []
+    failed: list[tuple[str, str]] = []
+
     previous_handler = signal.signal(signal.SIGINT, _handle_sigint)
     try:
-        with ProgressReporter() as report_progress:
-            result = service.start_download(request, on_progress=report_progress, cancel_token=cancel_token)
-    except DownloadError as error:
-        print_error(error, debug=debug)
-        raise typer.Exit(code=1) from error
+        for index, url in enumerate(valid_urls, start=1):
+            if cancel_token.is_cancelled:
+                failed.append((url, "Cancelled before start."))
+                continue
+            if is_batch:
+                typer.secho(f"[{index}/{len(valid_urls)}] {url}", bold=True)
+            request = DownloadRequest(
+                url=url,
+                output_dir=output_dir,
+                quality=quality,
+                audio_only=audio_only,
+                audio_format=audio_format or AudioFormat.M4A,
+                timeout_seconds=timeout,
+            )
+            try:
+                with ProgressReporter() as report_progress:
+                    result = service.start_download(
+                        request, on_progress=report_progress, cancel_token=cancel_token
+                    )
+            except DownloadError as error:
+                print_error(error, debug=debug)
+                failed.append((url, error.user_message))
+                continue
+            typer.secho(f"Done: {result.file_path}", fg=typer.colors.GREEN)
+            succeeded.append((url, result.file_path))
     finally:
         signal.signal(signal.SIGINT, previous_handler)
 
-    typer.secho(f"Done: {result.file_path}", fg=typer.colors.GREEN)
+    if is_batch or invalid_count or parsed.ignored:
+        typer.echo("")
+        typer.secho(
+            f"Summary: {len(succeeded)} succeeded, {len(failed)} failed"
+            + (f", {invalid_count + len(parsed.ignored)} skipped as invalid" if invalid_count or parsed.ignored else ""),
+            bold=True,
+        )
+        for url, message in failed:
+            typer.secho(f"  FAILED  {url} - {message}", fg=typer.colors.RED, err=True)
+
+    if failed or invalid_count or parsed.ignored:
+        raise typer.Exit(code=1)
 
 
 @app.command()

@@ -68,6 +68,12 @@ class DownloadJobManager:
         return True
 
     def _run(self, record: JobRecord, request: DownloadRequest) -> None:
+        if record.cancel_token.is_cancelled:
+            # Cancelled while still queued (e.g. "Cancel all" on a batch): never start it.
+            record.error = DownloadInterruptedError("Cancelled before start.")
+            record.state = JobState.CANCELLED
+            record.events.put(None)
+            return
         record.state = JobState.RUNNING
 
         def on_progress(event: ProgressEvent) -> None:

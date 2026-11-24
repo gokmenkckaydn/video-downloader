@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='video-downloader-gui',
+    name='video-downloader2-gui',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

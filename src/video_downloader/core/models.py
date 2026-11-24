@@ -13,6 +13,11 @@ class Quality(str, Enum):
     P480 = "480p"
 
 
+class AudioFormat(str, Enum):
+    M4A = "m4a"
+    MP3 = "mp3"
+
+
 class ProgressStatus(Enum):
     STARTING = "starting"
     DOWNLOADING = "downloading"
@@ -27,6 +32,7 @@ class DownloadRequest:
     output_dir: Path
     quality: Quality = Quality.BEST
     audio_only: bool = False
+    audio_format: AudioFormat = AudioFormat.M4A
     timeout_seconds: float = 30.0
 
 

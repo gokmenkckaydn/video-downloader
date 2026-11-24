@@ -178,3 +178,65 @@ def test_cancellation_raises_download_interrupted(tmp_path):
     request = DownloadRequest(url="https://example.com/video", output_dir=tmp_path)
     with pytest.raises(DownloadInterruptedError):
         adapter.download(request, on_progress=lambda e: None, cancel_token=token)
+
+
+def test_probe_ignores_playlist_part_of_watch_url():
+    seen_opts = []
+
+    def factory(opts):
+        seen_opts.append(opts)
+        return _FakeYoutubeDL(opts, info=SAMPLE_INFO)
+
+    YtDlpAdapter(youtube_dl_factory=factory).probe(
+        "https://www.youtube.com/watch?v=abc&list=RDabc&start_radio=1"
+    )
+
+    assert seen_opts[0]["noplaylist"] is True
+    assert seen_opts[0]["extract_flat"] == "in_playlist"
+
+
+def test_probe_rejects_pure_playlist_url():
+    playlist = {"_type": "playlist", "title": "Some list", "entries": [{"url": "x"}]}
+    adapter = YtDlpAdapter(youtube_dl_factory=lambda opts: _FakeYoutubeDL(opts, info=playlist))
+
+    with pytest.raises(UnsupportedPlatformError, match="playlist"):
+        adapter.probe("https://www.youtube.com/playlist?list=PL123")
+
+
+def test_cancel_during_probe_stops_before_download(tmp_path):
+    token = CancellationToken()
+    calls = []
+
+    def factory(opts):
+        calls.append(opts)
+        token.cancel()  # user presses Cancel while info is being fetched
+        return _FakeYoutubeDL(opts, info=SAMPLE_INFO)
+
+    adapter = YtDlpAdapter(youtube_dl_factory=factory)
+    request = DownloadRequest(url="https://example.com/video", output_dir=tmp_path)
+
+    with pytest.raises(DownloadInterruptedError):
+        adapter.download(request, on_progress=lambda e: None, cancel_token=token)
+    assert len(calls) == 1  # only the probe ran
+
+
+def test_download_mp3_sets_codec_bitrate_and_extension(tmp_path):
+    from video_downloader.core.models import AudioFormat
+
+    seen_opts = []
+
+    def factory(opts):
+        seen_opts.append(opts)
+        return _FakeYoutubeDL(opts, info=SAMPLE_INFO)
+
+    request = DownloadRequest(
+        url="https://example.com/video", output_dir=tmp_path, audio_only=True, audio_format=AudioFormat.MP3
+    )
+    result = YtDlpAdapter(youtube_dl_factory=factory).download(
+        request, on_progress=lambda e: None, cancel_token=CancellationToken()
+    )
+
+    assert result.file_path.suffix == ".mp3"
+    extract = seen_opts[-1]["postprocessors"][0]
+    assert extract["preferredcodec"] == "mp3"
+    assert extract["preferredquality"] == "192"
